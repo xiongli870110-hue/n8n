@@ -1,40 +1,49 @@
-# -------- STAGE 1: 构建阶段 --------
-FROM node:22-alpine AS builder
+ARG NODE_VERSION=22.21.0
+
+# ==============================================================================
+# STAGE 1: Builder for Base Dependencies + CLI 构建
+# ==============================================================================
+FROM node:${NODE_VERSION}-alpine AS builder
 
 WORKDIR /app
 
-# 安装系统依赖（支持 Python 节点）
-RUN apk add --no-cache python3 py3-pip curl wget
+# 安装字体和图像处理依赖
+RUN apk --no-cache add --virtual .build-deps-fonts msttcorefonts-installer fontconfig && \
+    update-ms-fonts && \
+    fc-cache -f && \
+    apk del .build-deps-fonts && \
+    find /usr/share/fonts/truetype/msttcorefonts/ -type l -exec unlink {} \;
 
-# 安装 pnpm
+# 添加 Alpine v3.22 源并安装依赖
+RUN echo "https://dl-cdn.alpinelinux.org/alpine/v3.22/main" >> /etc/apk/repositories && \
+    echo "https://dl-cdn.alpinelinux.org/alpine/v3.22/community" >> /etc/apk/repositories && \
+    apk update && \
+    apk add --no-cache libxml2 && \
+    apk add --no-cache \
+        git \
+        openssh \
+        openssl \
+        graphicsmagick \
+        tini \
+        tzdata \
+        ca-certificates \
+        libc6-compat \
+        jq \
+        python3 \
+        py3-pip \
+        curl \
+        wget
+
+# 安装 full-icu
+RUN npm install -g full-icu@1.5.0
+
+# 安装 pnpm 并构建 CLI
 RUN npm install -g pnpm
-
-# 拷贝官方源码（monorepo）
 COPY . .
-
-# 安装依赖并仅构建 CLI（跳过 UI、测试等）
 RUN pnpm install --filter ./packages/cli... && \
     pnpm build --filter ./packages/cli...
 
-# -------- STAGE 2: 运行阶段 --------
-FROM node:22-alpine
-
-ARG N8N_VERSION=custom
-LABEL maintainer="rakersfu <furuijun2025@gmail.com>"
-LABEL org.opencontainers.image.title="n8n-custom"
-LABEL org.opencontainers.image.description="Custom n8n build from official source with Python support"
-LABEL org.opencontainers.image.version=$N8N_VERSION
-
-ENV N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true \
-    N8N_RUNNERS_ENABLED=true \
-    N8N_PROXY_HOPS=1
-
-WORKDIR /app
-
-# 安装系统依赖（支持 Python 节点）
-RUN apk add --no-cache python3 py3-pip curl wget tini
-
-# 使用 get-pip.py 安装 pip 并绕过 PEP 668
+# 安装 pip 并绕过 PEP 668
 COPY requirements.txt /home/node/requirements.txt
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
     python3 get-pip.py --break-system-packages && \
@@ -42,14 +51,24 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
     pip3 install --no-cache-dir -r /home/node/requirements.txt --break-system-packages && \
     pip3 cache purge
 
-# 拷贝构建产物和运行依赖
-COPY --from=builder /app/packages/cli/dist ./packages/cli/dist
-COPY --from=builder /app/packages/cli/package.json ./packages/cli/package.json
-COPY --from=builder /app/packages/workflow ./packages/workflow
-COPY --from=builder /app/packages/nodes-base ./packages/nodes-base
-COPY --from=builder /app/node_modules ./node_modules
+# 清理构建缓存
+RUN rm -rf /tmp/* /root/.npm /root/.cache/node /opt/yarn* && apk del apk-tools
 
-# 修复权限问题（避免挂载目录报错）
+# ==============================================================================
+# STAGE 2: Final Runtime Image
+# ==============================================================================
+FROM node:${NODE_VERSION}-alpine
+
+# 拷贝构建产物和依赖
+COPY --from=builder / /
+
+WORKDIR /home/node
+ENV NODE_ICU_DATA=/usr/local/lib/node_modules/full-icu
+ENV N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true \
+    N8N_RUNNERS_ENABLED=true \
+    N8N_PROXY_HOPS=1
+
+# 修复权限问题
 RUN mkdir -p /home/node/.n8n && chown -R node:node /home/node/.n8n
 
 USER node
@@ -59,4 +78,4 @@ VOLUME ["/home/node/.n8n"]
 EXPOSE 5678
 
 ENTRYPOINT ["tini", "--"]
-CMD ["node", "packages/cli/dist/server.js"]
+CMD ["node", "/app/packages/cli/dist/server.js"]
