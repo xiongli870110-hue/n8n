@@ -1,5 +1,5 @@
 # -------- STAGE 1: 构建阶段 --------
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -9,14 +9,14 @@ RUN apk add --no-cache python3 py3-pip curl wget
 # 安装 pnpm
 RUN npm install -g pnpm
 
-# 拷贝源码（官方 monorepo）
+# 拷贝官方源码（monorepo）
 COPY . .
 
 # 安装依赖并构建
 RUN pnpm install && pnpm build
 
 # -------- STAGE 2: 运行阶段 --------
-FROM node:18-alpine
+FROM node:22-alpine
 
 ARG N8N_VERSION=custom
 LABEL maintainer="rakersfu <furuijun2025@gmail.com>"
@@ -41,7 +41,7 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
     pip3 install --no-cache-dir -r /home/node/requirements.txt --break-system-packages && \
     pip3 cache purge
 
-# 拷贝构建产物和依赖
+# 拷贝构建产物和运行依赖
 COPY --from=builder /app/packages/cli/dist ./packages/cli/dist
 COPY --from=builder /app/packages/cli/package.json ./packages/cli/package.json
 COPY --from=builder /app/packages/workflow ./packages/workflow
