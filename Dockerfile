@@ -41,8 +41,8 @@ RUN npm install -g full-icu@1.5.0 pnpm
 # 拷贝源码并安装依赖
 COPY . .
 
-# 构建所有依赖包（确保 CLI 可编译）
-RUN pnpm install && pnpm turbo run build --filter=cli --filter=workflow --filter=nodes-base --filter=core --filter=n8n-nodes-base --filter=n8n-workflow --filter=n8n-core
+# ✅ 使用官方推荐构建命令（自动构建所有依赖）
+RUN pnpm install && pnpm build
 
 # 安装 pip 并绕过 PEP 668
 COPY requirements.txt /home/node/requirements.txt
