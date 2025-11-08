@@ -59,7 +59,6 @@ RUN rm -rf /tmp/* /root/.npm /root/.cache/node /opt/yarn* && apk del apk-tools
 # ==============================================================================
 FROM node:${NODE_VERSION}-alpine
 
-# 拷贝构建产物和依赖
 COPY --from=builder / /
 
 WORKDIR /home/node
