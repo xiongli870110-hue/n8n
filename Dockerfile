@@ -1,7 +1,7 @@
 ARG NODE_VERSION=22.21.0
 
 # ==============================================================================
-# STAGE 1: Builder for Base Dependencies + CLI 构建
+# STAGE 1: Builder
 # ==============================================================================
 FROM node:${NODE_VERSION}-alpine AS builder
 
@@ -32,16 +32,17 @@ RUN echo "https://dl-cdn.alpinelinux.org/alpine/v3.22/main" >> /etc/apk/reposito
         python3 \
         py3-pip \
         curl \
-        wget
+        wget \
+        build-base
 
-# 安装 full-icu
-RUN npm install -g full-icu@1.5.0
+# 安装 full-icu 和 pnpm
+RUN npm install -g full-icu@1.5.0 pnpm
 
-# 安装 pnpm 并构建 CLI
-RUN npm install -g pnpm
+# 拷贝源码并安装依赖
 COPY . .
-RUN pnpm install --filter ./packages/cli... && \
-    pnpm build --filter ./packages/cli...
+
+# 安装依赖并构建 CLI（使用 turbo）
+RUN pnpm install && pnpm turbo run build --filter=cli...
 
 # 安装 pip 并绕过 PEP 668
 COPY requirements.txt /home/node/requirements.txt
@@ -51,17 +52,15 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
     pip3 install --no-cache-dir -r /home/node/requirements.txt --break-system-packages && \
     pip3 cache purge
 
-# 清理构建缓存
-RUN rm -rf /tmp/* /root/.npm /root/.cache/node /opt/yarn* && apk del apk-tools
-
 # ==============================================================================
-# STAGE 2: Final Runtime Image
+# STAGE 2: Runtime
 # ==============================================================================
 FROM node:${NODE_VERSION}-alpine
 
 COPY --from=builder / /
 
 WORKDIR /home/node
+
 ENV NODE_ICU_DATA=/usr/local/lib/node_modules/full-icu
 ENV N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true \
     N8N_RUNNERS_ENABLED=true \
