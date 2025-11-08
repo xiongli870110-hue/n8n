@@ -12,8 +12,9 @@ RUN npm install -g pnpm
 # 拷贝官方源码（monorepo）
 COPY . .
 
-# 安装依赖并构建
-RUN pnpm install && pnpm build
+# 安装依赖并仅构建 CLI（跳过 UI、测试等）
+RUN pnpm install --filter ./packages/cli... && \
+    pnpm build --filter ./packages/cli...
 
 # -------- STAGE 2: 运行阶段 --------
 FROM node:22-alpine
