@@ -10,12 +10,15 @@ FROM n8nio/base:${NODE_VERSION} AS source-builder
 
 WORKDIR /app
 
-# 拷贝源码并安装依赖
+# 安装 pnpm
+RUN npm install -g pnpm
+
+# 拷贝源码
 COPY . .
 
-RUN npm install -g pnpm && \
-    pnpm install && \
-    pnpm build
+# 安装依赖并构建
+RUN pnpm install --no-frozen-lockfile && \
+    pnpm build --reporter=append-only || tail -n 100 pnpm-debug.log
 
 # ==============================================================================
 # STAGE 1: System Dependencies & Base Setup
@@ -76,7 +79,8 @@ RUN cd /usr/local/lib/node_modules/n8n && \
     mkdir -p /home/node/.n8n && \
     chown -R node:node /home/node
 
-RUN cd /usr/local/lib/node_modules/n8n/node_modules/pdfjs-dist && npm install @napi-rs/canvas
+RUN cd /usr/local/lib/node_modules/n8n/node_modules/pdfjs-dist && \
+    npm install @napi-rs/canvas
 
 EXPOSE 5678/tcp
 USER node
