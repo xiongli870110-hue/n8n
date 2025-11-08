@@ -1,0 +1,10 @@
+requests
+dnspython
+tenacity
+beautifulsoup4
+fastapi
+feedparser
+lxml
+pyyaml
+flask
+pypinyin
