@@ -1,79 +1,89 @@
 ARG NODE_VERSION=22.21.0
+ARG N8N_VERSION=snapshot
+ARG LAUNCHER_VERSION=1.4.1
+ARG TARGETPLATFORM
 
 # ==============================================================================
-# STAGE 1: Builder
+# STAGE 0: Build from Source
 # ==============================================================================
-FROM node:${NODE_VERSION}-alpine AS builder
+FROM n8nio/base:${NODE_VERSION} AS source-builder
 
 WORKDIR /app
-
-# 安装字体和图像处理依赖
-RUN apk --no-cache add --virtual .build-deps-fonts msttcorefonts-installer fontconfig && \
-    update-ms-fonts && \
-    fc-cache -f && \
-    apk del .build-deps-fonts && \
-    find /usr/share/fonts/truetype/msttcorefonts/ -type l -exec unlink {} \;
-
-# 添加 Alpine v3.22 源并安装依赖
-RUN echo "https://dl-cdn.alpinelinux.org/alpine/v3.22/main" >> /etc/apk/repositories && \
-    echo "https://dl-cdn.alpinelinux.org/alpine/v3.22/community" >> /etc/apk/repositories && \
-    apk update && \
-    apk add --no-cache libxml2 && \
-    apk add --no-cache \
-        git \
-        openssh \
-        openssl \
-        graphicsmagick \
-        tini \
-        tzdata \
-        ca-certificates \
-        libc6-compat \
-        jq \
-        python3 \
-        py3-pip \
-        curl \
-        wget \
-        build-base
-
-# 安装 full-icu 和 pnpm
-RUN npm install -g full-icu@1.5.0 pnpm
 
 # 拷贝源码并安装依赖
 COPY . .
 
-# ✅ 使用官方推荐构建命令（自动构建所有依赖）
-RUN pnpm install && pnpm build
-
-# 安装 pip 并绕过 PEP 668
-COPY requirements.txt /home/node/requirements.txt
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
-    python3 get-pip.py --break-system-packages && \
-    rm get-pip.py && \
-    pip3 install --no-cache-dir -r /home/node/requirements.txt --break-system-packages && \
-    pip3 cache purge
+RUN npm install -g pnpm && \
+    pnpm install && \
+    pnpm build
 
 # ==============================================================================
-# STAGE 2: Runtime
+# STAGE 1: System Dependencies & Base Setup
 # ==============================================================================
-FROM node:${NODE_VERSION}-alpine
+FROM n8nio/base:${NODE_VERSION} AS system-deps
 
-COPY --from=builder / /
+# ==============================================================================
+# STAGE 2: Application Artifact Processor
+# ==============================================================================
+FROM alpine:3.22.0 AS app-artifact-processor
+
+COPY --from=source-builder /app/compiled /app/
+
+# ==============================================================================
+# STAGE 3: Task Runner Launcher
+# ==============================================================================
+FROM alpine:3.22.0 AS launcher-downloader
+ARG TARGETPLATFORM
+ARG LAUNCHER_VERSION
+
+RUN set -e; \
+    case "$TARGETPLATFORM" in \
+        "linux/amd64") ARCH_NAME="amd64" ;; \
+        "linux/arm64") ARCH_NAME="arm64" ;; \
+        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
+    esac; \
+    mkdir /launcher-temp && cd /launcher-temp; \
+    wget -q "https://github.com/n8n-io/task-runner-launcher/releases/download/${LAUNCHER_VERSION}/task-runner-launcher-${LAUNCHER_VERSION}-linux-${ARCH_NAME}.tar.gz"; \
+    wget -q "https://github.com/n8n-io/task-runner-launcher/releases/download/${LAUNCHER_VERSION}/task-runner-launcher-${LAUNCHER_VERSION}-linux-${ARCH_NAME}.tar.gz.sha256"; \
+    echo "$(cat task-runner-launcher-${LAUNCHER_VERSION}-linux-${ARCH_NAME}.tar.gz.sha256) task-runner-launcher-${LAUNCHER_VERSION}-linux-${ARCH_NAME}.tar.gz" > checksum.sha256; \
+    sha256sum -c checksum.sha256; \
+    mkdir -p /launcher-bin; \
+    tar xzf task-runner-launcher-${LAUNCHER_VERSION}-linux-${ARCH_NAME}.tar.gz -C /launcher-bin; \
+    cd / && rm -rf /launcher-temp
+
+# ==============================================================================
+# STAGE 4: Final Runtime Image
+# ==============================================================================
+FROM system-deps AS runtime
+
+ARG N8N_VERSION
+ARG N8N_RELEASE_TYPE=dev
+ENV NODE_ENV=production
+ENV N8N_RELEASE_TYPE=${N8N_RELEASE_TYPE}
+ENV NODE_ICU_DATA=/usr/local/lib/node_modules/full-icu
+ENV SHELL=/bin/sh
 
 WORKDIR /home/node
 
-ENV NODE_ICU_DATA=/usr/local/lib/node_modules/full-icu
-ENV N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true \
-    N8N_RUNNERS_ENABLED=true \
-    N8N_PROXY_HOPS=1
+COPY --from=app-artifact-processor /app /usr/local/lib/node_modules/n8n
+COPY --from=launcher-downloader /launcher-bin/* /usr/local/bin/
+COPY docker/images/n8n/docker-entrypoint.sh /
+COPY docker/images/n8n/n8n-task-runners.json /etc/n8n-task-runners.json
 
-# 修复权限问题
-RUN mkdir -p /home/node/.n8n && chown -R node:node /home/node/.n8n
+RUN cd /usr/local/lib/node_modules/n8n && \
+    npm rebuild sqlite3 && \
+    ln -s /usr/local/lib/node_modules/n8n/bin/n8n /usr/local/bin/n8n && \
+    mkdir -p /home/node/.n8n && \
+    chown -R node:node /home/node
 
+RUN cd /usr/local/lib/node_modules/n8n/node_modules/pdfjs-dist && npm install @napi-rs/canvas
+
+EXPOSE 5678/tcp
 USER node
+ENTRYPOINT ["tini", "--", "/docker-entrypoint.sh"]
 
-VOLUME ["/home/node/.n8n"]
-
-EXPOSE 5678
-
-ENTRYPOINT ["tini", "--"]
-CMD ["node", "/app/packages/cli/dist/server.js"]
+LABEL org.opencontainers.image.title="n8n" \
+      org.opencontainers.image.description="Workflow Automation Tool" \
+      org.opencontainers.image.source="https://github.com/n8n-io/n8n" \
+      org.opencontainers.image.url="https://n8n.io" \
+      org.opencontainers.image.version=${N8N_VERSION}
